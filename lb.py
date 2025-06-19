@@ -3,17 +3,19 @@ import threading
 import time
 
 SERV_HOST = '10.0.0.1'
+PORT_80 = 80
+lock = threading.Lock() # To calculate finish time safely - each time only one req
 
+#servers - keep ip, sock pd, finish time for servers management and types can handle
 servers = {
     '1': {'addr': '192.168.0.101', 'sock': None, 'finish_time': 0, 'can_handle': ['V', 'P']},
     '2': {'addr': '192.168.0.102', 'sock': None, 'finish_time': 0, 'can_handle': ['V', 'P']},
     '3': {'addr': '192.168.0.103', 'sock': None, 'finish_time': 0, 'can_handle': ['M']}
 }
 
-lock = threading.Lock()
 
-def LBPrint(string):
-    print('%s: %s-----' % (time.strftime('%H:%M:%S', time.localtime(time.time())), string))
+def TimePrint(string):
+    print('%s: %s----' % (time.strftime('%H:%M:%S', time.localtime(time.time())), string))
 
 
 def createSocket(addr, port):
@@ -22,23 +24,23 @@ def createSocket(addr, port):
         sock.connect((addr, port))
         return sock
     except Exception as e:
-        LBPrint("Could not connect to %s:%s: %s" % (addr, port, e))
+        TimePrint("Could not connect to %s:%s: %s" % (addr, port, e))
         return None
 
 
-def parseRequest(req):
-    """Parse request format: first byte is type (V/M/P), second byte is time"""
+def parse(req):
     if len(req) < 2:
         return None, None
 
     req_type = req[0]
-    req_time = req[1]
+    req_time = ord(req[1]) #convert to int in order to sum finish time
 
     return req_type, req_time
 
 
 def getOptimalServer(req_type, req_time):
-    """Select the server that will finish earliest and can handle the request type"""
+    #select optimal server, by type first and finish time second
+    
     current_time = time.time()
     best_server = None
     earliest_finish = float('inf')
@@ -55,7 +57,6 @@ def getOptimalServer(req_type, req_time):
 
             # Calculate when this server will be free
             server_finish_time = max(current_time, server_info['finish_time'])
-            new_finish_time = server_finish_time + req_time
 
             if server_finish_time < earliest_finish:
                 earliest_finish = server_finish_time
@@ -72,27 +73,27 @@ def handle_client(client_sock, client_addr):
     try:
         req = client_sock.recv(2)
         if len(req) < 2:
-            LBPrint("Invalid request from %s" % (client_addr,))
+            TimePrint("Invalid request from %s" % (client_addr,))
             client_sock.close()
             return
 
-        req_type, req_time = parseRequest(req)
+        req_type, req_time = parse(req)
         if req_type is None or req_type not in ['V', 'M', 'P']:
-            LBPrint("Invalid request type '%s' from %s" % (req_type, client_addr))
+            TimePrint("Invalid request type '%s' from %s" % (req_type, client_addr))
             client_sock.close()
             return
 
         servID = getOptimalServer(req_type, req_time)
 
         if servID is None:
-            LBPrint("No available server for request type '%s' from %s" % (req_type, client_addr))
+            TimePrint("No available server for request type '%s' from %s" % (req_type, client_addr))
             client_sock.close()
             return
 
         server_sock = servers[servID]['sock']
         server_addr = servers[servID]['addr']
 
-        LBPrint("Received %s request (time=%s) from %s, routing to server %s (%s)" %
+        TimePrint("Received %s request (time=%s) from %s, routing to server %s (%s)" %
                 (req_type, req_time, client_addr[0], servID, server_addr))
 
         server_sock.sendall(req)
@@ -100,7 +101,7 @@ def handle_client(client_sock, client_addr):
         client_sock.sendall(data)
 
     except Exception as e:
-        LBPrint("Error handling client %s: %s" % (client_addr, e))
+        TimePrint("Error handling client %s: %s" % (client_addr, e))
     finally:
         client_sock.close()
 
@@ -108,28 +109,30 @@ def handle_client(client_sock, client_addr):
 def main():
     global servers
 
-    LBPrint("Smart Load Balancer Started")
-    LBPrint("Server capabilities:")
-    LBPrint("  Server 1 & 2: Video (V) and Pictures (P)")
-    LBPrint("  Server 3: Music (M)")
-    LBPrint("Connecting to servers...")
+    TimePrint("Smart Load Balancer Started")
+    TimePrint("Server capabilities:")
+    TimePrint("  Server 1 and 2: Video and Pictures")
+    TimePrint("  Server 3: Music")
+    TimePrint("Connecting to servers...")
 
     # Connect to all backend servers
     for server_id, server_info in servers.items():
         addr = server_info['addr']
-        sock = createSocket(addr, 80)
+        sock = createSocket(addr, PORT_80)
         servers[server_id]['sock'] = sock
         if sock:
-            LBPrint("Connected to server %s at %s" % (server_id, addr))
+            TimePrint("Connected to server %s at %s" % (server_id, addr))
         else:
-            LBPrint("Failed to connect to server %s at %s" % (server_id, addr))
+            TimePrint("Failed to connect to server %s at %s" % (server_id, addr))
 
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    
+    #listening on '10.0.0.1' port 80 or clients; new request handled using new thread
     try:
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind((SERV_HOST, 80))
         server_sock.listen(5)
-        LBPrint("Listening on %s:80" % SERV_HOST)
+        TimePrint("Listening on %s:80" % SERV_HOST)
 
         while True:
             client_sock, client_addr = server_sock.accept()
