@@ -22,7 +22,7 @@ def createSocket(addr, port):
         sock.connect((addr, port))
         return sock
     except Exception as e:
-        LBPrint(f"Could not connect to {addr}:{port}: {e}")
+        LBPrint("Could not connect to %s:%s: %s" % (addr, port, e))
         return None
 
 
@@ -31,8 +31,8 @@ def parseRequest(req):
     if len(req) < 2:
         return None, None
 
-    req_type = chr(req[0])  # Convert byte to character
-    req_time = req[1]  # Time as integer
+    req_type = req[0]
+    req_time = req[1]
 
     return req_type, req_time
 
@@ -72,35 +72,35 @@ def handle_client(client_sock, client_addr):
     try:
         req = client_sock.recv(2)
         if len(req) < 2:
-            LBPrint(f"Invalid request from {client_addr}")
+            LBPrint("Invalid request from %s" % (client_addr,))
             client_sock.close()
             return
 
         req_type, req_time = parseRequest(req)
         if req_type is None or req_type not in ['V', 'M', 'P']:
-            LBPrint(f"Invalid request type '{req_type}' from {client_addr}")
+            LBPrint("Invalid request type '%s' from %s" % (req_type, client_addr))
             client_sock.close()
             return
 
         servID = getOptimalServer(req_type, req_time)
 
         if servID is None:
-            LBPrint(f"No available server for request type '{req_type}' from {client_addr}")
+            LBPrint("No available server for request type '%s' from %s" % (req_type, client_addr))
             client_sock.close()
             return
 
         server_sock = servers[servID]['sock']
         server_addr = servers[servID]['addr']
 
-        LBPrint(
-            f"Received {req_type} request (time={req_time}) from {client_addr[0]}, routing to server {servID} ({server_addr})")
+        LBPrint("Received %s request (time=%s) from %s, routing to server %s (%s)" %
+                (req_type, req_time, client_addr[0], servID, server_addr))
 
         server_sock.sendall(req)
         data = server_sock.recv(2)
         client_sock.sendall(data)
 
     except Exception as e:
-        LBPrint(f"Error handling client {client_addr}: {e}")
+        LBPrint("Error handling client %s: %s" % (client_addr, e))
     finally:
         client_sock.close()
 
@@ -120,22 +120,25 @@ def main():
         sock = createSocket(addr, 80)
         servers[server_id]['sock'] = sock
         if sock:
-            LBPrint(f"Connected to server {server_id} at {addr}")
+            LBPrint("Connected to server %s at %s" % (server_id, addr))
         else:
-            LBPrint(f"Failed to connect to server {server_id} at {addr}")
+            LBPrint("Failed to connect to server %s at %s" % (server_id, addr))
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind((SERV_HOST, 80))
         server_sock.listen(5)
-        LBPrint(f"Listening on {SERV_HOST}:80")
+        LBPrint("Listening on %s:80" % SERV_HOST)
 
         while True:
             client_sock, client_addr = server_sock.accept()
             thread = threading.Thread(target=handle_client, args=(client_sock, client_addr))
             thread.daemon = True
             thread.start()
+    finally:
+        server_sock.close()
 
 
 if __name__ == "__main__":
-    main
+    main()
