@@ -1,0 +1,141 @@
+import socket
+import threading
+import time
+
+SERV_HOST = '10.0.0.1'
+
+servers = {
+    '1': {'addr': '192.168.0.101', 'sock': None, 'finish_time': 0, 'can_handle': ['V', 'P']},
+    '2': {'addr': '192.168.0.102', 'sock': None, 'finish_time': 0, 'can_handle': ['V', 'P']},
+    '3': {'addr': '192.168.0.103', 'sock': None, 'finish_time': 0, 'can_handle': ['M']}
+}
+
+lock = threading.Lock()
+
+def LBPrint(string):
+    print('%s: %s-----' % (time.strftime('%H:%M:%S', time.localtime(time.time())), string))
+
+
+def createSocket(addr, port):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((addr, port))
+        return sock
+    except Exception as e:
+        LBPrint(f"Could not connect to {addr}:{port}: {e}")
+        return None
+
+
+def parseRequest(req):
+    """Parse request format: first byte is type (V/M/P), second byte is time"""
+    if len(req) < 2:
+        return None, None
+
+    req_type = chr(req[0])  # Convert byte to character
+    req_time = req[1]  # Time as integer
+
+    return req_type, req_time
+
+
+def getOptimalServer(req_type, req_time):
+    """Select the server that will finish earliest and can handle the request type"""
+    current_time = time.time()
+    best_server = None
+    earliest_finish = float('inf')
+
+    with lock:
+        for server_id, server_info in servers.items():
+            # Check if server can handle this request type
+            if req_type not in server_info['can_handle']:
+                continue
+
+            # Check if server socket is available
+            if server_info['sock'] is None:
+                continue
+
+            # Calculate when this server will be free
+            server_finish_time = max(current_time, server_info['finish_time'])
+            new_finish_time = server_finish_time + req_time
+
+            if server_finish_time < earliest_finish:
+                earliest_finish = server_finish_time
+                best_server = server_id
+
+        # Update the selected server's finish time
+        if best_server:
+            servers[best_server]['finish_time'] = max(current_time, servers[best_server]['finish_time']) + req_time
+
+    return best_server
+
+
+def handle_client(client_sock, client_addr):
+    try:
+        req = client_sock.recv(2)
+        if len(req) < 2:
+            LBPrint(f"Invalid request from {client_addr}")
+            client_sock.close()
+            return
+
+        req_type, req_time = parseRequest(req)
+        if req_type is None or req_type not in ['V', 'M', 'P']:
+            LBPrint(f"Invalid request type '{req_type}' from {client_addr}")
+            client_sock.close()
+            return
+
+        servID = getOptimalServer(req_type, req_time)
+
+        if servID is None:
+            LBPrint(f"No available server for request type '{req_type}' from {client_addr}")
+            client_sock.close()
+            return
+
+        server_sock = servers[servID]['sock']
+        server_addr = servers[servID]['addr']
+
+        LBPrint(
+            f"Received {req_type} request (time={req_time}) from {client_addr[0]}, routing to server {servID} ({server_addr})")
+
+        server_sock.sendall(req)
+        data = server_sock.recv(2)
+        client_sock.sendall(data)
+
+    except Exception as e:
+        LBPrint(f"Error handling client {client_addr}: {e}")
+    finally:
+        client_sock.close()
+
+
+def main():
+    global servers
+
+    LBPrint("Smart Load Balancer Started")
+    LBPrint("Server capabilities:")
+    LBPrint("  Server 1 & 2: Video (V) and Pictures (P)")
+    LBPrint("  Server 3: Music (M)")
+    LBPrint("Connecting to servers...")
+
+    # Connect to all backend servers
+    for server_id, server_info in servers.items():
+        addr = server_info['addr']
+        sock = createSocket(addr, 80)
+        servers[server_id]['sock'] = sock
+        if sock:
+            LBPrint(f"Connected to server {server_id} at {addr}")
+        else:
+            LBPrint(f"Failed to connect to server {server_id} at {addr}")
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_sock.bind((SERV_HOST, 80))
+        server_sock.listen(5)
+        LBPrint(f"Listening on {SERV_HOST}:80")
+
+        while True:
+            client_sock, client_addr = server_sock.accept()
+            thread = threading.Thread(target=handle_client, args=(client_sock, client_addr))
+            thread.daemon = True
+            thread.start()
+
+
+if __name__ == "__main__":
+    main
