@@ -5,6 +5,9 @@ import time
 SERV_HOST = '10.0.0.1'
 PORT_80 = 80
 lock = threading.Lock() # To calculate finish time safely - each time only one req
+thread_semaphore = threading.Semaphore(50) # Limit to 50 concurrent threads
+
+
 
 #servers - keep ip, sock pd, finish time for servers management and types can handle
 servers = {
@@ -40,7 +43,7 @@ def parse(req):
 
 def getOptimalServer(req_type, req_time):
     #select optimal server, by type first and finish time second
-    
+
     current_time = time.time()
     best_server = None
     earliest_finish = float('inf')
@@ -104,6 +107,7 @@ def handle_client(client_sock, client_addr):
         TimePrint("Error handling client %s: %s" % (client_addr, e))
     finally:
         client_sock.close()
+        thread_semaphore.release()
 
 
 def main():
@@ -126,16 +130,17 @@ def main():
             TimePrint("Failed to connect to server %s at %s" % (server_id, addr))
 
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
-    #listening on '10.0.0.1' port 80 or clients; new request handled using new thread
+
+    #listening on '10.0.0.1' port 80 for clients; new request handled using new thread
     try:
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind((SERV_HOST, 80))
-        server_sock.listen(5)
+        server_sock.listen(10) #queue size 10
         TimePrint("Listening on %s:80" % SERV_HOST)
 
         while True:
             client_sock, client_addr = server_sock.accept()
+            thread_semaphore.acquire()
             thread = threading.Thread(target=handle_client, args=(client_sock, client_addr))
             thread.daemon = True
             thread.start()
